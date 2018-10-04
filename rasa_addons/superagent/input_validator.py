@@ -1,4 +1,3 @@
-
 import io
 import yaml
 import re
@@ -6,11 +5,10 @@ from rasa_core.actions.action import Action
 from rasa_core.events import ActionExecuted, ActionReverted
 
 
-
 class InputValidator(object):
     def __init__(self, rules):
         self.rules = rules if rules is not None else []
-        self.actions_to_ignore = ['action_listen','action_invalid_utterance']
+        self.actions_to_ignore = ['action_listen', 'action_invalid_utterance']
 
     def ignore_action(self, action_name):
         self.actions_to_ignore.append(action_name)
@@ -67,7 +65,7 @@ class ActionInvalidUtterance(Action):
         self.template = template
 
     def run(self, dispatcher, tracker, domain):
-        dispatcher.utter_template(self.template)
+        dispatcher.utter_template(self.template, tracker)
 
         # utter error message
         latest_bot_message = {"text": tracker.latest_bot_utterance.text}

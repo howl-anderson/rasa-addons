@@ -3,7 +3,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-from rasa_addons.superagent.input_validator import ActionInvalidUtterance
+from rasa_addons.superagent.disambiguator import ActionDisambiguate
 from rasa_addons.superagent.rules import Rules
 from rasa_core.events import UserUttered
 from rasa_core.processor import MessageProcessor
@@ -20,6 +20,7 @@ class SuperMessageProcessor(MessageProcessor):
                  policy_ensemble,  # type: PolicyEnsemble
                  domain,  # type: Domain
                  tracker_store,  # type: TrackerStore
+                 generator,  # type: NaturalLanguageGenerator
                  max_number_of_predictions=10,  # type: int
                  message_preprocessor=None,  # type: Optional[LambdaType]
                  on_circuit_break=None,  # type: Optional[LambdaType]
@@ -33,27 +34,24 @@ class SuperMessageProcessor(MessageProcessor):
             policy_ensemble,
             domain,
             tracker_store,
+            generator,
             max_number_of_predictions,
             message_preprocessor,
             on_circuit_break
         )
         self.create_dispatcher = create_dispatcher
         if self.create_dispatcher is None:
-            self.create_dispatcher = lambda sender_id, output_channel, dom: Dispatcher(sender_id, output_channel, dom)
+            self.create_dispatcher = lambda sender_id, output_channel, nlg: Dispatcher(sender_id, output_channel, nlg)
 
     def _handle_message_with_tracker(self, message, tracker):
         # type: (UserMessage, DialogueStateTracker) -> None
 
         parse_data = self._parse_message(message)
 
-        if self.rules is not None:
-            self.rules.substitute_intent(parse_data, tracker)
-            self.rules.filter_entities(parse_data)
-
-            error_template = self.rules.input_validation.get_error(parse_data, tracker)
-            if error_template is not None:
-                self._utter_error_and_roll_back(message, tracker, error_template)
-                return
+        # rules section #
+        if self._rule_interrupts(parse_data, tracker, message):
+            return
+        # rules section - end #
 
         # don't ever directly mutate the tracker
         # - instead pass its events to log
@@ -66,23 +64,18 @@ class SuperMessageProcessor(MessageProcessor):
         logger.debug("Logged UserUtterance - "
                      "tracker now has {} events".format(len(tracker.events)))
 
-    def _utter_error_and_roll_back(self, latest_bot_message, tracker, template):
-        dispatcher = Dispatcher(latest_bot_message.sender_id,
-                                latest_bot_message.output_channel,
-                                self.domain)
-
-        action = ActionInvalidUtterance(template)
-
-        self._run_action(action, tracker, dispatcher)
+    def _rule_interrupts(self, parse_data, tracker, message):
+        if self.rules is not None:
+            dispatcher = self.create_dispatcher(message.sender_id, message.output_channel, self.nlg)
+            return self.rules.interrupts(dispatcher, parse_data, tracker, self._run_action)
 
     def _predict_and_execute_next_action(self, message, tracker):
         # this will actually send the response to the user
 
-        dispatcher = self.create_dispatcher(message.sender_id, message.output_channel, self.domain)
+        dispatcher = self.create_dispatcher(message.sender_id, message.output_channel, self.nlg)
         # keep taking actions decided by the policy until it chooses to 'listen'
         should_predict_another_action = True
         num_predicted_actions = 0
-
         self._log_slots(tracker)
 
         # action loop. predicts actions until we hit action listen
